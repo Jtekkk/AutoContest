@@ -10,13 +10,16 @@ AutoContest is a Python-based tool that automates the process of finding and ent
 
 ## Features
 
-- **Automated Contest Discovery**: Scrapes contest URLs from a comprehensive list of aggregator sites (e.g., SweepstakesFanatics, ContestGirl) and automatically updates the list by scraping hub sites for new aggregators.
-- **Form Submission**: Supports both POST and GET form submissions, with robust field mapping for user details (name, email, address, etc.) and handling of inputs, selects, textareas, checkboxes, and radio buttons.
+- **Concurrent Automation**: Scraping and form submission run fully asynchronously over a shared `aiohttp` session with a configurable concurrency limit, so a run completes in a fraction of the time a sequential pass would take.
+- **Automated Contest Discovery**: Scrapes contest URLs from a comprehensive list of aggregator sites (e.g., SweepstakesFanatics, ContestGirl) and can update the list by scanning curated hub sites for new aggregators (with a safety cap so discovery never turns into an unbounded crawl).
+- **Form Submission**: Supports both POST and GET form submissions, with robust field mapping for user details (name, email, address, etc.) and handling of inputs, selects, textareas, checkboxes, and radio buttons. It picks the most likely entry form on a page rather than blindly using the first one, and preserves hidden fields (e.g. CSRF tokens).
+- **Dry-Run Mode**: Parse and fill every form *without submitting anything* — ideal for testing your configuration or previewing what would be entered.
 - **CAPTCHA Support**: Detects and solves reCAPTCHA and hCAPTCHA using 2Captcha (requires API key and library installation).
-- **Live Output**: Displays real-time progress bars for scraping and form submission using the `rich` library.
-- **User Details Management**: Allows users to input and save personal details (e.g., name, email, address) to `config.json` for reuse.
-- **Error Handling**: Minimizes errors like 404s by using `urljoin` for accurate URLs and checks response text for success indicators (e.g., "thank you", "success").
-- **Menu-Driven Interface**: Offers options to run automation, view results, enter user details, update aggregator URLs, or exit.
+- **Command-Line & Menu Interfaces**: Run interactively via a menu, or non-interactively with flags (`--run`, `--dry-run`, `--update-aggregators`, …) for scripting and cron jobs.
+- **Live Output**: Displays real-time progress bars (with counts and elapsed time) for scraping and form submission using the `rich` library.
+- **User Details Management**: Allows users to input and save personal details (e.g., name, email, address) to `config.json` for reuse. A safety guard warns before submitting real entries while the details are still the example placeholder.
+- **Error Handling**: Retries transient failures with exponential backoff, uses `urljoin` for accurate URLs, sends a realistic browser User-Agent, and inspects response text for success/error indicators instead of trusting the HTTP status alone.
+- **Menu-Driven Interface**: Offers options to run automation, dry-run, view results, enter user details, update aggregator URLs, or exit.
 - **Logging**: Saves detailed logs to `automation.log` for debugging and tracking.
 
 ## Installation
@@ -28,9 +31,9 @@ AutoContest is a Python-based tool that automates the process of finding and ent
    ```
 
 2. **Install Dependencies**:
-   Ensure you have Python 3.7+ installed, then install the required packages:
+   Ensure you have Python 3.8+ installed, then install the required packages:
    ```bash
-   pip install requests aiohttp beautifulsoup4 rich
+   pip install -r requirements.txt
    ```
    For CAPTCHA support, install the optional 2Captcha library:
    ```bash
@@ -46,34 +49,58 @@ AutoContest is a Python-based tool that automates the process of finding and ent
 
 ## Usage
 
-1. **Run the Script**:
+1. **Interactive Mode** — run with no arguments to open the menu:
    ```bash
-   python autocontest.py
+   python AutoContest.py
    ```
 
-2. **Main Menu Options**:
-   - **[1] Run Automation**: Updates aggregator URLs (if enabled), scrapes contest URLs, and submits entry forms.
-   - **[2] View Last Results**: Displays results from the last automation run, saved in `contest-results.json`.
-   - **[3] Enter User Details**: Prompts for personal details (name, email, address, etc.) and saves them to `config.json`.
-   - **[4] Update Aggregator URLs**: Automatically scrapes hub sites to find and add new contest aggregator URLs.
-   - **[5] Exit**: Closes the program.
+   **Main Menu Options**:
+   - **[1] Run Automation (live)**: Scrapes contest URLs and submits entry forms.
+   - **[2] Dry Run**: Fills every form but submits nothing — great for testing.
+   - **[3] View Last Results**: Displays results from the last run (`contest-results.json`).
+   - **[4] Enter User Details**: Prompts for personal details and saves them to `config.json`.
+   - **[5] Update Aggregator URLs**: Scans hub sites to find and add new aggregator URLs.
+   - **[6] Exit**: Closes the program.
+
+2. **Command-Line Mode** — for scripting and cron jobs:
+   ```bash
+   python AutoContest.py --run                 # scrape + submit entries
+   python AutoContest.py --dry-run             # fill forms but do NOT submit
+   python AutoContest.py --update-aggregators  # discover new aggregators only
+   python AutoContest.py --run --concurrency 20 --limit 200 --yes
+   ```
+
+   Useful flags: `--config PATH`, `--results PATH`, `--concurrency N`,
+   `--max-retries N`, `--limit N` (cap contest URLs, `0` = no cap), and
+   `-y/--yes` (skip confirmation prompts). Run `python AutoContest.py --help`
+   for the full list.
 
 3. **Example Workflow**:
-   - Select `[3]` to enter your details (saved for future runs).
-   - Select `[4]` to update the aggregator list (optional, as it runs automatically with `[1]`).
+   - Select `[4]` to enter your details (saved for future runs).
+   - Select `[2]` to do a dry run and confirm forms are detected and filled correctly.
+   - Select `[5]` to refresh the aggregator list (optional).
    - Select `[1]` to scrape contests and submit entries, with live progress updates.
-   - View results with `[2]` to see success/failure details.
+   - View results with `[3]` to see success/failure details.
 
 ![Usage Screenshot](screenshots/screenshot2.jpg)
 
 ## Configuration
 
+> **Note:** `config.json` holds your personal details, so it is listed in
+> `.gitignore` and should never be committed. The script creates it locally on
+> first save.
+
 The `config.json` file stores:
-- **aggregator_urls**: A list of contest aggregator sites (e.g., SweepstakesFanatics, HGTV). Automatically updated via the `[4]` menu option.
+- **aggregator_urls**: A list of contest aggregator sites (e.g., SweepstakesFanatics, HGTV). Updated via the `[5]` menu option or `--update-aggregators`.
 - **field_mappings**: Maps form field names to user data fields.
 - **user_data**: Stores user details (e.g., name, email, address) for form filling.
 - **max_retries**: Number of retry attempts for form submissions (default: 3).
+- **concurrency**: Maximum number of concurrent HTTP requests (default: 10).
+- **request_timeout**: Per-request timeout in seconds (default: 20).
 - **twocaptcha_api_key**: API key for 2Captcha (optional, for CAPTCHA solving).
+
+Any key you omit from `config.json` is automatically backfilled with its
+default, and a malformed file falls back to defaults instead of crashing.
 
 Example `config.json`:
 ```json
@@ -102,11 +129,13 @@ Example `config.json`:
 
 ## Important Notes
 
+- **Test with a Dry Run First**: Use `--dry-run` (or menu option `[2]`) to confirm forms are detected and filled correctly before submitting anything live.
 - **CAPTCHA Handling**: Without a 2Captcha API key, the script skips forms with CAPTCHAs. Obtain a key from [2Captcha](https://2captcha.com/) and add it to `config.json`.
 - **JavaScript Limitations**: The script uses `BeautifulSoup` for scraping and form submission, which doesn't handle JavaScript-heavy forms. For such cases, consider integrating Selenium (not included).
-- **Performance**: The large number of aggregator URLs may increase runtime. Adjust `max_retries` or add rate-limiting if needed.
-- **Error Handling**: The script minimizes errors (e.g., 404s) by using `urljoin` and checking response text for success indicators. Check `automation.log` for detailed error reports.
-- **Maintenance**: Aggregator and hub site URLs may change. Periodically run `[4]` to update the aggregator list.
+- **Performance**: Work runs concurrently; tune `--concurrency` (default 10) to balance speed against politeness, and use `--limit` to cap how many contest URLs are processed in one run.
+- **Data Privacy**: `config.json`, `contest-results.json`, and `automation.log` may contain your personal details and are excluded from version control via `.gitignore`.
+- **Error Handling**: The script retries transient failures with exponential backoff, uses `urljoin` for accurate URLs, and checks response text for success/error indicators. Check `automation.log` for detailed error reports.
+- **Maintenance**: Aggregator and hub site URLs may change. Periodically run `[5]` (or `--update-aggregators`) to refresh the aggregator list.
 
 ## Legal and Ethical Considerations
 

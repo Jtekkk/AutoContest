@@ -1,0 +1,7 @@
+# Core dependencies
+aiohttp>=3.9
+beautifulsoup4>=4.12
+rich>=13.0
+
+# Optional: CAPTCHA solving (only needed if a 2Captcha API key is configured)
+# 2captcha-python>=1.2
