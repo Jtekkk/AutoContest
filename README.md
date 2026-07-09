@@ -11,7 +11,7 @@ AutoContest is a Python-based tool that automates the process of finding and ent
 ## Features
 
 - **Concurrent Automation**: Scraping and form submission run fully asynchronously over a shared `aiohttp` session with a configurable concurrency limit, so a run completes in a fraction of the time a sequential pass would take.
-- **Automated Contest Discovery**: Scrapes contest URLs from a comprehensive list of aggregator sites (e.g., SweepstakesFanatics, ContestGirl) and can update the list by scanning curated hub sites for new aggregators (with a safety cap so discovery never turns into an unbounded crawl).
+- **Automated Contest Discovery**: Scrapes contest URLs from a large built-in list of 100+ aggregator sites (dedicated sweepstakes directories, roundup blogs, international aggregators, and brand/media hubs) and can grow the list by scanning curated hub sites for new aggregators (with a safety cap so discovery never turns into an unbounded crawl).
 - **Form Submission**: Supports both POST and GET form submissions, with robust field mapping for user details (name, email, address, etc.) and handling of inputs, selects, textareas, checkboxes, and radio buttons. It picks the most likely entry form on a page rather than blindly using the first one, and preserves hidden fields (e.g. CSRF tokens).
 - **Dry-Run Mode**: Parse and fill every form *without submitting anything* — ideal for testing your configuration or previewing what would be entered.
 - **CAPTCHA Support**: Detects and solves reCAPTCHA and hCAPTCHA using 2Captcha (requires API key and library installation).
@@ -58,7 +58,7 @@ AutoContest is a Python-based tool that automates the process of finding and ent
    - **[1] Run Automation (live)**: Scrapes contest URLs and submits entry forms.
    - **[2] Dry Run**: Fills every form but submits nothing — great for testing.
    - **[3] View Last Results**: Displays results from the last run (`contest-results.json`).
-   - **[4] Enter User Details**: Prompts for personal details and saves them to `config.json`.
+   - **[4] Enter User Details**: Prompts for personal details (including birthdate, `YYYY-MM-DD`) and saves them to `config.json`.
    - **[5] Update Aggregator URLs**: Scans hub sites to find and add new aggregator URLs.
    - **[6] Exit**: Closes the program.
 
@@ -93,7 +93,7 @@ AutoContest is a Python-based tool that automates the process of finding and ent
 The `config.json` file stores:
 - **aggregator_urls**: A list of contest aggregator sites (e.g., SweepstakesFanatics, HGTV). Updated via the `[5]` menu option or `--update-aggregators`.
 - **field_mappings**: Maps form field names to user data fields.
-- **user_data**: Stores user details (e.g., name, email, address) for form filling.
+- **user_data**: Stores user details (name, email, address, phone, and **birthdate** in `YYYY-MM-DD` format) for form filling. The birthdate is used to fill age-verification fields, including forms that split it into separate month/day/year inputs.
 - **max_retries**: Number of retry attempts for form submissions (default: 3).
 - **concurrency**: Maximum number of concurrent HTTP requests (default: 10).
 - **request_timeout**: Per-request timeout in seconds (default: 20).
@@ -120,6 +120,7 @@ Example `config.json`:
     "first_name": "John",
     "last_name": "Doe",
     "email": "example@email.com",
+    "birthdate": "1990-01-01",
     ...
   },
   "max_retries": 3,

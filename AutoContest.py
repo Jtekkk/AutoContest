@@ -95,6 +95,7 @@ PLACEHOLDER_USER_DATA = {
     "state": "CA",
     "zip": "12345",
     "phone": "1234567890",
+    "birthdate": "1990-01-01",
 }
 
 DEFAULT_AGGREGATOR_URLS = [
@@ -168,6 +169,48 @@ DEFAULT_AGGREGATOR_URLS = [
     "https://www.liveabout.com/sweepstakes-4163146",
     "https://www.ilovegiveaways.com/",
     "https://1sweepstakes.com/",
+    # --- Additional directories & roundup blogs ---
+    "https://www.juliesfreebies.com/online-sweepstakes/",
+    "https://hey-its-free.com/sweepstakes/",
+    "https://www.freestufffinder.com/category/sweepstakes/",
+    "https://freebies4mom.com/category/giveaways/",
+    "https://www.freeflys.com/sweepstakes/",
+    "https://www.freebieshark.com/category/sweepstakes/",
+    "https://sweetfreestuff.com/category/sweepstakes/",
+    "https://www.mojosavings.com/category/giveaways/",
+    "https://moneysavingmom.com/category/giveaways/",
+    "https://www.giveawaybandit.com/",
+    "https://sweepsheet.com/",
+    "https://www.sweepstakesninja.com/",
+    # --- International aggregators (UK / AU / CA) ---
+    "https://www.theprizefinder.com/",
+    "https://www.loquax.co.uk/",
+    "https://www.magicfreebies.co.uk/competitions",
+    "https://www.moneymagpie.com/competitions",
+    "https://superlucky.me/",
+    "https://www.australiancompetitions.com/",
+    "https://www.contesthound.com/",
+    "https://contestcanada.net/",
+    "https://www.canadianfreestuff.com/",
+    # --- Brand / media sweepstakes hubs ---
+    "https://www.elle.com/sweepstakes/",
+    "https://www.delish.com/sweepstakes/",
+    "https://www.housebeautiful.com/sweepstakes/",
+    "https://www.popularmechanics.com/sweepstakes/",
+    "https://www.menshealth.com/sweepstakes/",
+    "https://www.womenshealthmag.com/sweepstakes/",
+    "https://www.prevention.com/sweepstakes/",
+    "https://www.townandcountrymag.com/sweepstakes/",
+    "https://www.harpersbazaar.com/sweepstakes/",
+    "https://www.esquire.com/sweepstakes/",
+    "https://www.thepioneerwoman.com/sweepstakes/",
+    "https://www.allrecipes.com/sweepstakes/",
+    "https://www.travelandleisure.com/sweepstakes",
+    "https://www.foodandwine.com/sweepstakes",
+    "https://www.eatingwell.com/sweepstakes",
+    "https://www.bravotv.com/sweepstakes",
+    "https://www.nbc.com/nbc-sweepstakes",
+    "https://www.cookingchanneltv.com/sweepstakes",
 ]
 
 # Curated hub sites that list sweepstakes aggregators (no API needed).
@@ -196,6 +239,7 @@ def default_config() -> dict[str, Any]:
             "state": "state",
             "zip": "zip",
             "phone": "phone",
+            "birthdate": "birthdate",
         },
         "user_data": dict(PLACEHOLDER_USER_DATA),
         "max_retries": 3,
@@ -249,6 +293,23 @@ def is_placeholder_data(user_data: dict[str, str]) -> bool:
     )
 
 
+def _prompt_birthdate() -> str:
+    """Prompt for an ISO (YYYY-MM-DD) birthdate, re-asking on bad input."""
+    default = PLACEHOLDER_USER_DATA["birthdate"]
+    value = default
+    for _ in range(3):
+        value = Prompt.ask("Birthdate (YYYY-MM-DD)", default=default).strip()
+        if not value:
+            return default
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+            return value
+        except ValueError:
+            console.print("[yellow]Please use the format YYYY-MM-DD (e.g., 1990-01-01).[/]")
+    console.print("[yellow]Keeping the last value entered.[/]")
+    return value
+
+
 def input_user_data() -> dict[str, str]:
     """Prompt interactively for the user's contest-entry details."""
     console.print(Panel.fit("[bold cyan]Enter Your Details[/]", border_style="cyan"))
@@ -262,7 +323,9 @@ def input_user_data() -> dict[str, str]:
         ("zip", "Zip Code"),
         ("phone", "Phone Number"),
     ]
-    return {key: Prompt.ask(label, default=PLACEHOLDER_USER_DATA[key]) for key, label in fields}
+    user_data = {key: Prompt.ask(label, default=PLACEHOLDER_USER_DATA[key]) for key, label in fields}
+    user_data["birthdate"] = _prompt_birthdate()
+    return user_data
 
 
 def init_logging() -> None:
@@ -484,11 +547,45 @@ async def solve_captcha(kind: str, sitekey: str, url: str, api_key: str) -> str:
 
 
 # ========== Form handling ==========
+def _birthdate_part(birthdate: str, part: str) -> str:
+    """Return the month/day/year component of an ISO (YYYY-MM-DD) birthdate.
+
+    Falls back to the raw string if it isn't a valid date.
+    """
+    try:
+        dt = datetime.strptime(birthdate, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return birthdate
+    if part == "month":
+        return f"{dt.month:02d}"
+    if part == "day":
+        return f"{dt.day:02d}"
+    if part == "year":
+        return f"{dt.year:04d}"
+    return birthdate
+
+
 def match_field(name: str, user_data: dict[str, str], field_mappings: dict[str, str]) -> str:
     """Map a form field *name* to the best-matching user value."""
     if name in field_mappings:
         return user_data.get(field_mappings[name], "")
     low = name.lower()
+
+    # Birthdate: whole-date fields plus split month/day/year parts. Strip the
+    # birth indicator first so "birthday"/"bday" don't self-match the "day" part.
+    if any(ind in low for ind in ("birth", "dob", "bday")):
+        birthdate = user_data.get("birthdate", "")
+        remainder = low
+        for ind in ("birthdate", "birthday", "birth", "bday", "dob"):
+            remainder = remainder.replace(ind, " ")
+        if "month" in remainder or "mm" in remainder:
+            return _birthdate_part(birthdate, "month")
+        if "year" in remainder or "yyyy" in remainder or "yy" in remainder or "yr" in remainder:
+            return _birthdate_part(birthdate, "year")
+        if "day" in remainder or "dd" in remainder:
+            return _birthdate_part(birthdate, "day")
+        return birthdate
+
     for keyword, field in (
         ("email", "email"),
         ("first", "first_name"),
