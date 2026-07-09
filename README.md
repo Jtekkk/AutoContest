@@ -20,6 +20,7 @@ AutoContest is a Python-based tool that automates the process of finding and ent
 - **User Details Management**: Allows users to input and save personal details (e.g., name, email, address) to `config.json` for reuse. A safety guard warns before submitting real entries while the details are still the example placeholder.
 - **Error Handling**: Retries transient failures with exponential backoff, uses `urljoin` for accurate URLs, sends a realistic browser User-Agent, and inspects response text for success/error indicators instead of trusting the HTTP status alone.
 - **Menu-Driven Interface**: Offers options to run automation, dry-run, view results, enter user details, update aggregator URLs, or exit.
+- **Standalone Executable**: Can be packaged into a single-file executable (`AutoContest.exe` on Windows) with PyInstaller — no Python install required to run it. Pre-built binaries are produced automatically by a GitHub Actions workflow.
 - **Logging**: Saves detailed logs to `automation.log` for debugging and tracking.
 
 ## Installation
@@ -46,6 +47,31 @@ AutoContest is a Python-based tool that automates the process of finding and ent
      ```json
      "twocaptcha_api_key": "your-api-key-here"
      ```
+
+## Standalone Executable (no Python required)
+
+If you'd rather run AutoContest without installing Python, you can use a
+single-file executable (`AutoContest.exe` on Windows).
+
+**Download a pre-built binary (easiest):**
+The [`Build executables`](../../actions/workflows/build-exe.yml) GitHub Actions
+workflow builds executables for Windows, macOS, and Linux on every push and can
+be run manually from the **Actions** tab. Open the latest run and download the
+`AutoContest-windows` artifact (or `-macos` / `-linux`). Pushing a version tag
+such as `v1.0.0` also attaches the binaries to a GitHub Release.
+
+**Build it yourself:**
+PyInstaller does not cross-compile, so build on the OS you want the executable
+for (e.g. run this on Windows to get `AutoContest.exe`):
+```bash
+pip install -r requirements.txt pyinstaller 2captcha-python
+pyinstaller AutoContest.spec
+```
+The executable is written to the `dist/` folder. Run it just like the script —
+double-click for the menu, or from a terminal with flags:
+```bash
+AutoContest.exe --dry-run
+```
 
 ## Usage
 

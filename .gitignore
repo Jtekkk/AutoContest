@@ -11,3 +11,7 @@ __pycache__/
 venv/
 env/
 .pytest_cache/
+
+# PyInstaller build output
+build/
+dist/
