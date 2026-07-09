@@ -12,7 +12,9 @@ AutoContest is a Python-based tool that automates the process of finding and ent
 
 - **Concurrent Automation**: Scraping and form submission run fully asynchronously over a shared `aiohttp` session with a configurable concurrency limit, so a run completes in a fraction of the time a sequential pass would take.
 - **Automated Contest Discovery**: Scrapes contest URLs from a large built-in list of 100+ aggregator sites (dedicated sweepstakes directories, roundup blogs, international aggregators, and brand/media hubs) and can grow the list by scanning curated hub sites for new aggregators (with a safety cap so discovery never turns into an unbounded crawl).
-- **Form Submission**: Supports both POST and GET form submissions, with robust field mapping for user details (name, email, address, etc.) and handling of inputs, selects, textareas, checkboxes, and radio buttons. It picks the most likely entry form on a page rather than blindly using the first one, and preserves hidden fields (e.g. CSRF tokens).
+- **Form Submission**: Supports both POST and GET form submissions, with robust field mapping for user details (name, email, address, etc.) and handling of inputs, selects, textareas, checkboxes, and radio buttons. It only submits forms that actually look like entry forms (those with identity fields), skipping search boxes, login/registration forms, and other page chrome, and preserves hidden fields (e.g. CSRF tokens).
+- **Smart Link Filtering**: When scraping, it drops links that are not individual entry pages — social share/profile links, link shorteners, and navigation/account/legal/category/tag pages — and collapses URL fragments so the same page isn't entered many times.
+- **Honest Reporting**: Results distinguish **Confirmed** entries (the response contained an explicit confirmation) from **Submitted (unconfirmed)** (the form posted and returned OK, but no confirmation was detected), so the summary reflects what actually happened rather than counting every HTTP 200 as a win.
 - **Dry-Run Mode**: Parse and fill every form *without submitting anything* — ideal for testing your configuration or previewing what would be entered.
 - **CAPTCHA Support**: Detects and solves reCAPTCHA and hCAPTCHA using 2Captcha (requires API key and library installation).
 - **Command-Line & Menu Interfaces**: Run interactively via a menu, or non-interactively with flags (`--run`, `--dry-run`, `--update-aggregators`, …) for scripting and cron jobs.
@@ -161,7 +163,8 @@ Example `config.json`:
 - **JavaScript Limitations**: The script uses `BeautifulSoup` for scraping and form submission, which doesn't handle JavaScript-heavy forms. For such cases, consider integrating Selenium (not included).
 - **Performance**: Work runs concurrently; tune `--concurrency` (default 10) to balance speed against politeness, and use `--limit` to cap how many contest URLs are processed in one run.
 - **Data Privacy**: `config.json`, `contest-results.json`, and `automation.log` may contain your personal details and are excluded from version control via `.gitignore`.
-- **Error Handling**: The script retries transient failures with exponential backoff, uses `urljoin` for accurate URLs, and checks response text for success/error indicators. Check `automation.log` for detailed error reports.
+- **Error Handling**: The script retries transient failures with exponential backoff, uses `urljoin` for accurate URLs, and classifies each result as confirmed / submitted-unconfirmed / skipped / failed based on the response text rather than trusting the HTTP status alone. Check `automation.log` for detailed error reports.
+- **Interpreting Results**: Treat **Submitted (unconfirmed)** as "posted but unverified", not a guaranteed entry — many JavaScript-driven or multi-step entry forms can't be completed by a plain HTTP client. **Confirmed** is the count to trust.
 - **Maintenance**: Aggregator and hub site URLs may change. Periodically run `[5]` (or `--update-aggregators`) to refresh the aggregator list.
 
 ## Legal and Ethical Considerations

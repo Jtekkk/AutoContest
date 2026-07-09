@@ -30,7 +30,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Optional
-from urllib.parse import urljoin
+from urllib.parse import urldefrag, urljoin, urlparse
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -66,15 +66,24 @@ DEFAULT_HEADERS = {
 }
 
 CONTEST_KEYWORDS = ("sweep", "contest", "giveaway")
+
+# Specific confirmation phrases. Kept deliberately narrow: single words like
+# "thank"/"success"/"entered" appear on nearly every sweepstakes page and made
+# the old success count meaningless.
 SUCCESS_INDICATORS = (
-    "thank",
-    "success",
-    "entered",
-    "submitted",
-    "congrat",
-    "confirmation",
-    "you're in",
-    "you are in",
+    "thank you for entering",
+    "thanks for entering",
+    "you have been entered",
+    "you've been entered",
+    "you're entered",
+    "youre entered",
+    "you are entered",
+    "your entry has been",
+    "entry received",
+    "entry confirmed",
+    "successfully entered",
+    "you're now entered",
+    "good luck",
 )
 ERROR_INDICATORS = (
     "invalid",
@@ -85,6 +94,41 @@ ERROR_INDICATORS = (
     "was not",
     "error occurred",
 )
+
+# Hosts that are never contest-entry pages (social share/profile, app stores,
+# link shorteners, JS-only widgets).
+SKIP_DOMAINS = (
+    "facebook.com",
+    "twitter.com",
+    "x.com",
+    "instagram.com",
+    "youtube.com",
+    "tiktok.com",
+    "pinterest.com",
+    "linkedin.com",
+    "reddit.com",
+    "addtoany.com",
+    "play.google.com",
+    "apps.apple.com",
+    "bit.ly",
+    "t.co",
+    "sweepwidget.com",
+    "royaldraw.com",
+)
+# Path segments that mark a page as navigation/account/legal/listing rather than
+# an entry page. Matched against whole path segments to avoid false substrings
+# (e.g. "/about" must not match "/about-town-giveaway").
+SKIP_PATH_SEGMENTS = frozenset(
+    {
+        "login", "signin", "sign_in", "signup", "sign_up", "register",
+        "account", "auth", "cart", "checkout", "share", "sharer",
+        "privacy", "terms", "tos", "disclaimer", "about", "contact",
+        "faq", "sitemap", "advertise", "rules", "category", "tag",
+        "archive", "archives", "page", "feed", "wp-login.php", "wp-login",
+    }
+)
+# Query-string markers that indicate a share/social endpoint.
+SKIP_QUERY_MARKERS = ("linkurl=", "sharer", "share?", "u=http", "text=", "mini=true")
 
 PLACEHOLDER_USER_DATA = {
     "first_name": "John",
@@ -401,15 +445,50 @@ async def gather_with_progress(
 
 
 # ========== Scraping ==========
+def is_entry_candidate(url: str) -> bool:
+    """Filter out links that are clearly not individual contest-entry pages.
+
+    Drops social share/profile links, link shorteners, and navigation/account/
+    legal/listing pages so the run targets real entry pages instead of the
+    surrounding site chrome.
+    """
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    host = host[4:] if host.startswith("www.") else host
+    if any(host == d or host.endswith("." + d) for d in SKIP_DOMAINS):
+        return False
+    query = parsed.query.lower()
+    if query and any(marker in query for marker in SKIP_QUERY_MARKERS):
+        return False
+    for seg in parsed.path.lower().split("/"):
+        if not seg:
+            continue
+        # Test the raw segment and its extension-stripped stem so "privacy.htm"
+        # and "page.pl" are caught by "privacy"/"page".
+        if seg in SKIP_PATH_SEGMENTS or seg.split(".", 1)[0] in SKIP_PATH_SEGMENTS:
+            return False
+    return True
+
+
 def extract_contest_links(base_url: str, html: str) -> list[str]:
-    """Return absolute contest-like links found in *html*."""
+    """Return absolute, de-duplicated contest-entry links found in *html*."""
     soup = BeautifulSoup(html, "html.parser")
-    links = []
+    seen: set[str] = set()
+    links: list[str] = []
     for a in soup.find_all("a", href=True):
-        link = urljoin(base_url, a["href"])
+        # Drop the URL fragment so "/x#comment-1", "/x#respond", "/x" collapse.
+        link = urldefrag(urljoin(base_url, a["href"])).url
+        if not link.startswith("http"):
+            continue
         low = link.lower()
-        if link.startswith("http") and any(k in low for k in CONTEST_KEYWORDS):
-            links.append(link)
+        if not any(k in low for k in CONTEST_KEYWORDS):
+            continue
+        if not is_entry_candidate(link):
+            continue
+        if link in seen:
+            continue
+        seen.add(link)
+        links.append(link)
     return links
 
 
@@ -603,15 +682,44 @@ def match_field(name: str, user_data: dict[str, str], field_mappings: dict[str, 
     return ""
 
 
-def choose_form(forms: list[Any]) -> Any:
-    """Pick the form most likely to be a contest-entry form."""
-    def score(form: Any) -> int:
-        blob = " ".join(
-            f"{i.get('name', '')} {i.get('type', '')}" for i in form.find_all("input")
-        ).lower()
-        return sum(k in blob for k in ("email", "first", "last", "name", "address", "zip", "phone"))
+IDENTITY_KEYWORDS = ("email", "first", "last", "name", "address", "zip", "phone", "fname", "lname")
+SEARCH_FIELD_NAMES = ("q", "s", "query", "search", "keyword", "keywords")
 
-    return max(forms, key=score)
+
+def form_entry_score(form: Any) -> int:
+    """Score how much a form looks like a real contest-entry form.
+
+    Returns -1 for forms that are definitely not entries (they contain a
+    password field, i.e. login/registration), otherwise the number of distinct
+    identity fields present. Pure search boxes score 0.
+    """
+    score = 0
+    for el in form.find_all(["input", "select", "textarea"]):
+        itype = (el.get("type") or "text").lower()
+        if itype == "password":
+            return -1
+        name = (el.get("name") or "").lower()
+        if itype == "search" or name in SEARCH_FIELD_NAMES:
+            continue
+        if any(k in name for k in IDENTITY_KEYWORDS):
+            score += 1
+    return score
+
+
+def choose_form(forms: list[Any]) -> Optional[Any]:
+    """Pick the most likely contest-entry form, or ``None`` if none qualifies.
+
+    A form must contain at least one identity field (name/email/address/…) to be
+    considered an entry form; this filters out search boxes, login forms, and
+    newsletter-only widgets that previously produced bogus "success" results.
+    """
+    best: Optional[Any] = None
+    best_score = 0
+    for form in forms:
+        score = form_entry_score(form)
+        if score > best_score:
+            best, best_score = form, score
+    return best
 
 
 def build_form_data(
@@ -655,16 +763,21 @@ def build_form_data(
     return form_data
 
 
-def evaluate_submission(status: int, text: str) -> tuple[bool, str]:
-    """Decide whether a submission succeeded from the response."""
+def evaluate_submission(status: int, text: str) -> tuple[bool, bool, str]:
+    """Classify a submission response as ``(submitted, confirmed, note)``.
+
+    ``confirmed`` is only True when the response text carries an explicit
+    entry-confirmation phrase. A bare HTTP 200 counts as submitted-but-
+    unconfirmed, because a 200 alone does not prove an entry was recorded.
+    """
     low = text.lower()
-    if any(word in low for word in SUCCESS_INDICATORS):
-        return True, "Submitted (confirmation detected)"
+    if any(phrase in low for phrase in SUCCESS_INDICATORS):
+        return True, True, "Entry confirmed"
     if status >= 400:
-        return False, f"HTTP {status}"
+        return False, False, f"HTTP {status}"
     if any(word in low for word in ERROR_INDICATORS):
-        return False, "Response indicates a validation error"
-    return True, f"Submitted (HTTP {status})"
+        return False, False, "Response indicates a validation error"
+    return True, False, f"Submitted, unconfirmed (HTTP {status})"
 
 
 async def submit_form(
@@ -682,6 +795,7 @@ async def submit_form(
     result: dict[str, Any] = {
         "url": url,
         "submitted": False,
+        "confirmed": False,
         "retries": 0,
         "reason": "Failed after retries",
         "forms": 0,
@@ -706,6 +820,9 @@ async def submit_form(
 
             result["forms"] = len(forms)
             form = choose_form(forms)
+            if form is None:
+                result["reason"] = "No entry form found"
+                return result
             form_data = build_form_data(form, user_data, field_mappings)
 
             captcha = detect_captcha(soup)
@@ -753,10 +870,11 @@ async def submit_form(
                 await backoff(attempt)
                 continue
 
-            ok, note = evaluate_submission(*submit)
-            result["submitted"] = ok
+            submitted, confirmed, note = evaluate_submission(*submit)
+            result["submitted"] = submitted
+            result["confirmed"] = confirmed
             result["reason"] = note
-            if ok:
+            if submitted:
                 return result
             # Non-success response — retry unless this was the last attempt.
             if attempt < max_retries:
@@ -797,22 +915,30 @@ def display_results(
     table.add_column("Result", justify="center", style="bold")
     table.add_column("Notes", justify="left", style="white")
 
-    success = skipped = failed = 0
+    confirmed = unconfirmed = skipped = failed = 0
     for r in results:
         reason = r.get("reason", "")
         low_reason = reason.lower()
-        if r.get("submitted"):
-            success += 1
-            label = "[green]Dry run OK[/]" if dry_run else "[green]Success[/]"
-            notes = reason or f"{r.get('forms', 1)} form(s) attempted"
+        if dry_run and r.get("submitted"):
+            unconfirmed += 1
+            label = "[green]Dry run OK[/]"
+            notes = reason
+        elif r.get("confirmed"):
+            confirmed += 1
+            label = "[green]Confirmed[/]"
+            notes = reason
+        elif r.get("submitted"):
+            unconfirmed += 1
+            label = "[cyan]Submitted?[/]"
+            notes = reason
         elif "captcha" in low_reason:
             skipped += 1
             label = "[yellow]Skipped (CAPTCHA)[/]"
             notes = reason
-        elif "no forms" in low_reason:
+        elif "no forms" in low_reason or "no entry form" in low_reason:
             skipped += 1
-            label = "[yellow]Skipped (no forms)[/]"
-            notes = "No form elements found"
+            label = "[yellow]Skipped (no entry form)[/]"
+            notes = reason
         else:
             failed += 1
             label = "[red]Failed[/]"
@@ -824,13 +950,26 @@ def display_results(
 
     total = len(results)
     duration = (datetime.now() - start_time).total_seconds()
-    verb = "would-be entries" if dry_run else "entries"
+    if dry_run:
+        headline = f"[bold green]Dry run complete — {unconfirmed}/{total} form(s) would be submitted in {duration:.1f}s[/]"
+        breakdown = f"[white]Would submit:[/] [green]{unconfirmed}[/]   "
+    else:
+        headline = (
+            f"[bold green]Automation complete — {confirmed} confirmed "
+            f"of {total} pages in {duration:.1f}s[/]"
+        )
+        breakdown = (
+            f"[white]Confirmed:[/] [green]{confirmed}[/]   "
+            f"[white]Submitted (unconfirmed):[/] [cyan]{unconfirmed}[/]   "
+        )
     console.print(
         Panel.fit(
-            f"[bold green]Automation complete — {success}/{total} {verb} in {duration:.1f}s[/]\n"
-            f"[white]Success:[/] [green]{success}[/]   "
+            f"{headline}\n"
+            f"{breakdown}"
             f"[white]Skipped:[/] [yellow]{skipped}[/]   "
             f"[white]Failed:[/] [red]{failed}[/]\n\n"
+            f"[dim]\"Submitted (unconfirmed)\" means the page returned OK but no entry "
+            f"confirmation was detected — it may not be a real entry.[/]\n"
             f"[white]Results saved to:[/] [magenta]{result_file}[/]",
             border_style="green",
         )
