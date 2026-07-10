@@ -726,6 +726,23 @@ def load_config(path: str = DEFAULT_CONFIG_FILE) -> dict[str, Any]:
         merged_user = dict(PLACEHOLDER_USER_DATA)
         merged_user.update(config.get("user_data") or {})
         config["user_data"] = merged_user
+        # Union the current built-in source list into the saved one. Without
+        # this, a config.json written by an older build permanently shadows the
+        # defaults, so newly shipped aggregator URLs would never reach the user.
+        # Saved URLs (incl. any the user added) are kept and come first; missing
+        # built-ins are appended.
+        saved_urls = config.get("aggregator_urls")
+        if isinstance(saved_urls, list):
+            seen = set(saved_urls)
+            added = [u for u in DEFAULT_AGGREGATOR_URLS if u not in seen]
+            if added:
+                config["aggregator_urls"] = saved_urls + added
+                console.print(
+                    f"[cyan]Added {len(added)} new built-in source(s) to your saved list "
+                    f"({len(config['aggregator_urls'])} total).[/]"
+                )
+        else:
+            config["aggregator_urls"] = list(DEFAULT_AGGREGATOR_URLS)
     return config
 
 
