@@ -1,0 +1,17 @@
+# Runtime files that may contain personal data — never commit these
+config.json
+contest-results.json
+automation.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# PyInstaller build output
+build/
+dist/
